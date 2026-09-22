@@ -16,7 +16,7 @@ from src.baseline_generator import NormalBaselineGenerator
 from src.features import extract_signal_features
 
 
-def main() -> None:
+def test_baseline_generation_and_feature_extraction() -> None:
     data_dir = PROJECT_ROOT / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -39,18 +39,8 @@ def main() -> None:
     feature_dict = extract_signal_features(signal, sample_rate=generator.sample_rate, base_frequency=generator.f_base)
     features_df = pd.DataFrame([feature_dict])
 
-    print("Generated samples:", len(signal))
-    print("Saved sample baseline to:", output_path)
-    print("\nFeature summary:")
-    print(features_df.to_string(index=False))
-
     assert len(signal) == 2000, "Signal length must be 2000 samples."
     assert np.all(np.isfinite(signal)), "Signal contains non-finite values."
     assert feature_dict["rms"] > 0, "RMS should be positive."
     assert feature_dict["fft_amplitude_base"] > 0, "Fundamental FFT amplitude should be positive."
-
-    print("\nCHECK PASSED: baseline generation and feature extraction are valid.")
-
-
-if __name__ == "__main__":
-    main()
+    assert len(features_df) == 1

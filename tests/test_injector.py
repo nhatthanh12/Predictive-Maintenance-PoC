@@ -18,7 +18,7 @@ from src.baseline_generator import NormalBaselineGenerator
 from src.fault_injector import FaultInjector
 
 
-def main() -> None:
+def test_fault_injector_generates_physics_informed_signatures() -> None:
     report_dir = PROJECT_ROOT / "reports" / "figures"
     report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -71,13 +71,4 @@ def main() -> None:
     assert fault_amp_3x > baseline_amp_3x * 1.05
     assert plot_path.exists(), "FFT comparison plot was not created."
 
-    print("Generated fault signal length:", len(fault_signal))
-    print("FFT comparison saved to:", plot_path)
-    print(f"0.5x amplitude: normal={baseline_amp_05x:.6f}, fault={fault_amp_05x:.6f}")
-    print(f"2x amplitude: normal={baseline_amp_2x:.6f}, fault={fault_amp_2x:.6f}")
-    print(f"3x amplitude: normal={baseline_amp_3x:.6f}, fault={fault_amp_3x:.6f}")
-    print("CHECK PASSED: synthetic fault injection creates physics-informed spectral signatures.")
-
-
-if __name__ == "__main__":
-    main()
+    assert plot_path.stat().st_size > 0
