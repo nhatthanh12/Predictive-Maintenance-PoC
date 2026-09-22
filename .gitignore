@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.png
+*.csv
+*.mat
+.env
+.clinerules.backup
+
+# Keep reproducible report artifacts and the generated sample dataset.
+!data/sample_baseline.csv
+!reports/
+!reports/figures/
+!reports/figures/*.png
+!reports/figures/*.csv

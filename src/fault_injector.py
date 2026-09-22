@@ -46,6 +46,8 @@ class FaultInjector:
         impact_probability: float = 0.15,
         impact_amplitude: float = 1.5,
         frequency_shift: float = 0.05,
+        severity: str = "severe",
+        speed_drift_range: tuple[float, float] | None = None,
     ) -> np.ndarray:
         """Create a synthetic loose-bolt signal using physics-informed modulation.
 
@@ -61,22 +63,50 @@ class FaultInjector:
             Peak amplitude of each impact pulse.
         frequency_shift : float
             Relative frequency detuning used to simulate stiffness asymmetry.
+        severity : {"severe", "incipient"}
+            Fault maturity. ``incipient`` limits the injected component to a
+            small fraction of the healthy signal amplitude, close to the
+            industrial noise floor.
+        speed_drift_range : tuple[float, float] or None
+            Optional operating-speed range in Hz. When supplied, one shaft
+            frequency is sampled from this range for this independent block.
         """
         signal = np.asarray(baseline_signal, dtype=float).copy()
         n = signal.size
         t = np.arange(n) / self.sample_rate
 
-        base_frequency = self.f_base * (1.0 + frequency_shift * (self.rng.uniform(-1.0, 1.0)))
-        subharmonic = 8.0 * looseness_level * np.sin(2 * np.pi * (0.5 * base_frequency) * t)
-        second_harmonic = 12.0 * looseness_level * np.sin(2 * np.pi * (2 * base_frequency) * t + 0.9)
-        third_harmonic = 15.0 * looseness_level * np.sin(2 * np.pi * (3 * base_frequency) * t + 1.3)
+        if severity not in {"severe", "incipient"}:
+            raise ValueError("severity must be 'severe' or 'incipient'")
+
+        if speed_drift_range is None:
+            base_frequency = self.f_base * (1.0 + frequency_shift * self.rng.uniform(-1.0, 1.0))
+        else:
+            low, high = speed_drift_range
+            if low >= high:
+                raise ValueError("speed_drift_range must be an increasing (low, high) pair")
+            base_frequency = self.rng.uniform(low, high)
+
+        # Severe faults preserve the historical amplitudes. Incipient faults
+        # are deliberately close to the background, at 5-15% of the healthy
+        # signal peak, so the classifier cannot rely on a trivial magnitude cue.
+        if severity == "incipient":
+            fault_amplitude = self.rng.uniform(0.05, 0.15) * max(np.max(np.abs(signal)), 1e-12)
+            harmonic_scale = fault_amplitude / 15.0
+            impact_scale = fault_amplitude / max(4.0 * impact_amplitude, 1e-12)
+        else:
+            harmonic_scale = 1.0
+            impact_scale = 1.0
+
+        subharmonic = harmonic_scale * 8.0 * looseness_level * np.sin(2 * np.pi * (0.5 * base_frequency) * t)
+        second_harmonic = harmonic_scale * 12.0 * looseness_level * np.sin(2 * np.pi * (2 * base_frequency) * t + 0.9)
+        third_harmonic = harmonic_scale * 15.0 * looseness_level * np.sin(2 * np.pi * (3 * base_frequency) * t + 1.3)
 
         modulation = 1.0 + 0.35 * np.sin(2 * np.pi * 1.2 * t)
         signal = signal * (1.0 + 0.35 * looseness_level * modulation)
 
         impact_mask = self.rng.random(n) < impact_probability
         impact_pattern = np.zeros(n)
-        impact_pattern[impact_mask] = 4.0 * impact_amplitude * self.rng.normal(1.0, 0.25, size=np.sum(impact_mask))
+        impact_pattern[impact_mask] = impact_scale * 4.0 * impact_amplitude * self.rng.normal(1.0, 0.25, size=np.sum(impact_mask))
         impact_pattern *= np.exp(-2.5 * np.abs(np.sin(2 * np.pi * 2.0 * t)))
 
         fault_signal = signal + subharmonic + second_harmonic + third_harmonic + impact_pattern

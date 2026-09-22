@@ -1,41 +1,34 @@
-"""Train/evaluate baseline and synthetic-augmented fault detection models.
-
-This module follows the project rule of not using random shuffling on time-series
-signals. It uses a time-based split and compares two scenarios:
-1) baseline-only anomaly model
-2) normal + synthetic fault augmentation scenario
-"""
+"""Leakage-audited, time-ordered benchmark for severe and incipient faults."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score, roc_curve
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
+
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from src.baseline_generator import NormalBaselineGenerator
 from src.fault_injector import FaultInjector
 from src.features import extract_signal_features
 
-
-@dataclass
-class EvaluationSummary:
-    """Container for model comparison metrics."""
-
-    precision: float
-    recall: float
-    f1: float
-    roc_auc: float
-    false_positive_rate: float
-    confusion_matrix_values: tuple[int, int, int, int]
+FEATURE_COLUMNS = [
+    "rms", "kurtosis", "crest_factor", "peak_to_peak",
+    "fft_amplitude_base", "fft_amplitude_2x", "fft_amplitude_3x",
+]
+SPEED_DRIFT_RANGE = (28.5, 31.5)
 
 
 def _build_dataset(
@@ -44,132 +37,151 @@ def _build_dataset(
     sample_rate: float,
     normal_duration: float,
     fault_duration: float,
-    f_base: float,
     random_state: int,
+    severity: str,
 ) -> tuple[pd.DataFrame, np.ndarray]:
-    """Construct a balanced feature dataset with normal and synthetic-fault samples."""
-    generator = NormalBaselineGenerator(sample_rate=sample_rate, duration=normal_duration, f_base=f_base, random_state=random_state)
-    injector = FaultInjector(sample_rate=sample_rate, f_base=f_base, random_state=random_state)
+    """Create independent, non-overlapping signal blocks in chronological order."""
+    if severity not in {"severe", "incipient"}:
+        raise ValueError("severity must be 'severe' or 'incipient'")
 
-    normal_records: list[dict[str, float]] = []
-    fault_records: list[dict[str, float]] = []
-
-    for _ in range(n_normal):
-        signal = generator.generate_signal(length=int(sample_rate * normal_duration))
-        feats = extract_signal_features(signal, sample_rate=sample_rate, base_frequency=f_base)
-        normal_records.append(feats)
-
-    for _ in range(n_fault):
-        baseline = generator.generate_signal(length=int(sample_rate * fault_duration))
-        evil = injector.generate_loose_bolt_signal(
-            baseline_signal=baseline,
-            looseness_level=0.9,
-            impact_probability=0.18,
-            impact_amplitude=1.6,
-            frequency_shift=0.05,
-        )
-        feats = extract_signal_features(evil, sample_rate=sample_rate, base_frequency=f_base)
-        fault_records.append(feats)
-
-    records: list[dict[str, float]] = []
+    rng = np.random.default_rng(random_state)
+    rows: list[dict[str, float | int]] = []
     labels: list[int] = []
-    for i in range(max(n_normal, n_fault)):
-        if i < n_normal:
-            normal_row = normal_records[i].copy()
-            normal_row["label"] = 0
-            records.append(normal_row)
+    block_id = 0
+
+    for index in range(max(n_normal, n_fault)):
+        if index < n_normal:
+            operating_frequency = rng.uniform(*SPEED_DRIFT_RANGE)
+            generator = NormalBaselineGenerator(
+                sample_rate=sample_rate,
+                duration=normal_duration,
+                f_base=operating_frequency,
+                random_state=random_state + block_id,
+            )
+            signal = generator.generate_signal(length=int(sample_rate * normal_duration))
+            features = extract_signal_features(signal, sample_rate, operating_frequency)
+            rows.append({**features, "block_id": block_id, "operating_frequency": operating_frequency})
             labels.append(0)
-        if i < n_fault:
-            fault_row = fault_records[i].copy()
-            fault_row["label"] = 1
-            records.append(fault_row)
+            block_id += 1
+
+        if index < n_fault:
+            operating_frequency = rng.uniform(*SPEED_DRIFT_RANGE)
+            generator = NormalBaselineGenerator(
+                sample_rate=sample_rate,
+                duration=fault_duration,
+                f_base=operating_frequency,
+                random_state=random_state + block_id,
+            )
+            injector = FaultInjector(
+                sample_rate=sample_rate,
+                f_base=operating_frequency,
+                random_state=random_state + block_id,
+            )
+            baseline = generator.generate_signal(length=int(sample_rate * fault_duration))
+            signal = injector.generate_loose_bolt_signal(
+                baseline_signal=baseline,
+                looseness_level=0.9 if severity == "severe" else 0.35,
+                impact_probability=0.18 if severity == "severe" else 0.04,
+                impact_amplitude=1.6 if severity == "severe" else 0.4,
+                frequency_shift=0.05,
+                severity=severity,
+            )
+            features = extract_signal_features(signal, sample_rate, operating_frequency)
+            rows.append({**features, "block_id": block_id, "operating_frequency": operating_frequency})
             labels.append(1)
+            block_id += 1
 
-    df = pd.DataFrame(records)
-    y = np.asarray(labels, dtype=int)
-    return df, y
+    dataset = pd.DataFrame(rows)
+    # One row represents one complete signal block; no sliding windows exist.
+    if dataset["block_id"].duplicated().any():
+        raise RuntimeError("Duplicate signal block detected; refusing to evaluate")
+    return dataset, np.asarray(labels, dtype=int)
 
 
-def _train_and_score(
-    X_train: pd.DataFrame,
-    X_test: pd.DataFrame,
-    y_train: np.ndarray,
-    y_test: np.ndarray,
-    model_name: str,
-    figures_dir: Path,
-) -> tuple[RandomForestClassifier, dict[str, Any]]:
-    """Train a random forest classifier and compute industrial metrics."""
-    model = RandomForestClassifier(
-        n_estimators=200,
-        random_state=42,
-        class_weight="balanced",
-        min_samples_leaf=2,
-    )
-    model.fit(X_train, y_train)
-    prob = model.predict_proba(X_test)[:, 1]
-    pred = model.predict(X_test)
+def _iter_time_splits(
+    dataset: pd.DataFrame,
+    labels: np.ndarray,
+    n_splits: int = 3,
+) -> Iterator[tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]]:
+    """Yield chronological folds with a one-block embargo between train/test."""
+    splitter = TimeSeriesSplit(n_splits=n_splits, gap=1)
+    for train_idx, test_idx in splitter.split(dataset):
+        if set(train_idx).intersection(test_idx):
+            raise RuntimeError("Train/test overlap detected")
+        if dataset.iloc[train_idx]["block_id"].isin(dataset.iloc[test_idx]["block_id"]).any():
+            raise RuntimeError("Signal block leakage detected")
+        yield dataset.iloc[train_idx].copy(), dataset.iloc[test_idx].copy(), labels[train_idx], labels[test_idx]
 
-    tn, fp, fn, tp = confusion_matrix(y_test, pred, labels=[0, 1]).ravel()
-    precision = precision_score(y_test, pred, zero_division=0)
-    recall = recall_score(y_test, pred, zero_division=0)
-    f1 = f1_score(y_test, pred, zero_division=0)
-    roc_auc = roc_auc_score(y_test, prob)
-    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
-    fig, ax = plt.subplots(figsize=(6, 5), dpi=300)
-    cm = confusion_matrix(y_test, pred, labels=[0, 1])
-    im = ax.imshow(cm, cmap="Blues")
-    ax.set_xticks([0, 1])
-    ax.set_yticks([0, 1])
-    ax.set_xticklabels(["Normal", "Fault"])
-    ax.set_yticklabels(["Normal", "Fault"])
-    ax.set_title(f"{model_name} Confusion Matrix")
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(j, i, str(cm[i, j]), ha="center", va="center", color="black")
-    fig.colorbar(im, ax=ax)
-    fig.tight_layout()
-    fig.savefig(figures_dir / f"{model_name.lower()}_confusion_matrix.png", dpi=300)
-    plt.close(fig)
-
-    metrics = {
-        "precision": float(precision),
-        "recall": float(recall),
-        "f1": float(f1),
-        "roc_auc": float(roc_auc),
-        "false_positive_rate": float(fpr),
-        "confusion_matrix": (int(tn), int(fp), int(fn), int(tp)),
+def _summarize_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    score: np.ndarray,
+    scenario: str,
+    severity: str,
+    fold: int,
+) -> dict[str, Any]:
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+    return {
+        "Severity": severity,
+        "Scenario": scenario,
+        "Fold": fold,
+        "Precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "Recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "F1-Score": float(f1_score(y_true, y_pred, zero_division=0)),
+        "ROC-AUC": float(roc_auc_score(y_true, score)),
+        "False Positive Rate": float(fp / (fp + tn)) if (fp + tn) else 0.0,
+        "TN": int(tn), "FP": int(fp), "FN": int(fn), "TP": int(tp),
     }
-    return model, metrics
 
 
-def _time_series_split_dataset(df: pd.DataFrame, y: np.ndarray) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]:
-    """Create train/test split without shuffling, preserving time order."""
-    tss = TimeSeriesSplit(n_splits=3)
-    train_idx, test_idx = next(tss.split(df))
-    return df.iloc[train_idx].copy(), df.iloc[test_idx].copy(), y[train_idx], y[test_idx]
-
-
-def _plot_roc_curve(
-    baseline_metrics: dict[str, Any],
-    augmented_metrics: dict[str, Any],
-    baseline_probs: np.ndarray,
-    augmented_probs: np.ndarray,
-    output_path: Path,
-) -> None:
-    """Create a comparison ROC curve for both scenarios."""
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=300)
-    for label, probs, metrics in [("Baseline", baseline_probs, baseline_metrics), ("Augmented", augmented_probs, augmented_metrics)]:
-        fpr, tpr, _ = roc_curve(metrics["y_true"], probs)
-        ax.plot(fpr, tpr, label=f"{label} (AUC={metrics['roc_auc']:.3f})")
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Random")
-    ax.set_title("ROC Curve Comparison")
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.legend()
+def _save_confusion_matrix(cm: np.ndarray, title: str, path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(6, 5), dpi=300)
+    image = ax.imshow(cm, cmap="Blues")
+    ax.set_xticks([0, 1], ["Normal", "Fault"])
+    ax.set_yticks([0, 1], ["Normal", "Fault"])
+    ax.set_title(title)
+    for row in range(2):
+        for column in range(2):
+            ax.text(column, row, str(cm[row, column]), ha="center", va="center")
+    fig.colorbar(image, ax=ax)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(path, dpi=300)
     plt.close(fig)
+
+
+def _run_scenario(dataset: pd.DataFrame, labels: np.ndarray, severity: str, figures_dir: Path) -> pd.DataFrame:
+    fold_rows: list[dict[str, Any]] = []
+    total_cms = {name: np.zeros((2, 2), dtype=int) for name in ("Baseline", "Augmented")}
+
+    for fold, (train, test, y_train, y_test) in enumerate(_iter_time_splits(dataset, labels), start=1):
+        train_features = train[FEATURE_COLUMNS]
+        test_features = test[FEATURE_COLUMNS]
+        normal_train = train_features.loc[y_train == 0]
+        if normal_train.empty or len(np.unique(y_train)) < 2 or len(np.unique(y_test)) < 2:
+            raise RuntimeError(f"Fold {fold} does not contain both required classes")
+
+        baseline_model = IsolationForest(n_estimators=200, contamination=0.1, random_state=42)
+        baseline_model.fit(normal_train)
+        baseline_train_score = -baseline_model.score_samples(normal_train)
+        baseline_score = -baseline_model.score_samples(test_features)
+        baseline_pred = (baseline_score > np.quantile(baseline_train_score, 0.95)).astype(int)
+        baseline_cm = confusion_matrix(y_test, baseline_pred, labels=[0, 1])
+        total_cms["Baseline"] += baseline_cm
+        fold_rows.append(_summarize_metrics(y_test, baseline_pred, baseline_score, "Baseline", severity, fold))
+
+        augmented_model = RandomForestClassifier(n_estimators=300, class_weight="balanced", random_state=42)
+        augmented_model.fit(train_features, y_train)
+        class_one = int(np.flatnonzero(augmented_model.classes_ == 1)[0])
+        augmented_score = augmented_model.predict_proba(test_features)[:, class_one]
+        augmented_pred = (augmented_score >= 0.5).astype(int)
+        augmented_cm = confusion_matrix(y_test, augmented_pred, labels=[0, 1])
+        total_cms["Augmented"] += augmented_cm
+        fold_rows.append(_summarize_metrics(y_test, augmented_pred, augmented_score, "Augmented", severity, fold))
+
+    _save_confusion_matrix(total_cms["Baseline"], f"{severity} Baseline Confusion Matrix", figures_dir / f"{severity.lower()}_baseline_confusion_matrix.png")
+    _save_confusion_matrix(total_cms["Augmented"], f"{severity} Augmented Confusion Matrix", figures_dir / f"{severity.lower()}_augmented_confusion_matrix.png")
+    return pd.DataFrame(fold_rows)
 
 
 def run_training_evaluation(
@@ -181,65 +193,36 @@ def run_training_evaluation(
     f_base: float = 30.0,
     random_state: int = 42,
     figures_dir: str | Path | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Run the baseline and augmented scenarios and compare industrial metrics."""
-    base_dir = Path(figures_dir) if figures_dir is not None else Path("reports/figures")
-    base_dir.mkdir(parents=True, exist_ok=True)
+) -> pd.DataFrame:
+    """Benchmark both models across Severe and Incipient drifting-speed faults."""
+    output_dir = Path(figures_dir) if figures_dir is not None else Path("reports/figures")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    del f_base
 
-    df, y = _build_dataset(n_normal, n_fault, sample_rate, normal_duration, fault_duration, f_base, random_state)
-    X_train, X_test, y_train, y_test = _time_series_split_dataset(df, y)
+    all_rows = []
+    for severity in ("Severe", "Incipient"):
+        dataset, labels = _build_dataset(
+            n_normal, n_fault, sample_rate, normal_duration, fault_duration, random_state, severity.lower()
+        )
+        all_rows.append(_run_scenario(dataset, labels, severity, output_dir))
 
-    baseline_model, baseline_metrics = _train_and_score(
-        X_train[["rms", "kurtosis", "crest_factor", "peak_to_peak", "fft_amplitude_base", "fft_amplitude_2x", "fft_amplitude_3x"]],
-        X_test[["rms", "kurtosis", "crest_factor", "peak_to_peak", "fft_amplitude_base", "fft_amplitude_2x", "fft_amplitude_3x"]],
-        y_train,
-        y_test,
-        "Baseline",
-        base_dir,
-    )
-    baseline_probs = baseline_model.predict_proba(X_test[["rms", "kurtosis", "crest_factor", "peak_to_peak", "fft_amplitude_base", "fft_amplitude_2x", "fft_amplitude_3x"]])[:, 1]
-    baseline_metrics["y_true"] = y_test
+    fold_results = pd.concat(all_rows, ignore_index=True)
+    metric_columns = ["Precision", "Recall", "F1-Score", "ROC-AUC", "False Positive Rate"]
+    aggregate = fold_results.groupby(["Severity", "Scenario"])[metric_columns].agg(["mean", "std"]).reset_index()
+    aggregate.columns = [
+        " ".join(column).strip() if isinstance(column, tuple) else column
+        for column in aggregate.columns
+    ]
+    fold_results.to_csv(output_dir / "metric_comparison_by_fold.csv", index=False)
+    aggregate.to_csv(output_dir / "metric_comparison_summary.csv", index=False)
 
-    augmented_df = df.copy()
-    augmented_df["label"] = y
-    augmented_X = augmented_df.drop(columns=["label"]).copy()
-    augmented_y = augmented_df["label"].to_numpy(dtype=int)
-    aug_train, aug_test, aug_y_train, aug_y_test = _time_series_split_dataset(augmented_X, augmented_y)
-
-    augmented_model, augmented_metrics = _train_and_score(
-        aug_train,
-        aug_test,
-        aug_y_train,
-        aug_y_test,
-        "Augmented",
-        base_dir,
-    )
-    augmented_probs = augmented_model.predict_proba(aug_test)[:, 1]
-    augmented_metrics["y_true"] = aug_y_test
-
-    _plot_roc_curve(baseline_metrics, augmented_metrics, baseline_probs, augmented_probs, base_dir / "roc_curve_comparison.png")
-
-    summary = {
-        "baseline": {
-            "precision": baseline_metrics["precision"],
-            "recall": baseline_metrics["recall"],
-            "f1": baseline_metrics["f1"],
-            "roc_auc": baseline_metrics["roc_auc"],
-            "false_positive_rate": baseline_metrics["false_positive_rate"],
-            "confusion_matrix": baseline_metrics["confusion_matrix"],
-        },
-        "augmented": {
-            "precision": augmented_metrics["precision"],
-            "recall": augmented_metrics["recall"],
-            "f1": augmented_metrics["f1"],
-            "roc_auc": augmented_metrics["roc_auc"],
-            "false_positive_rate": augmented_metrics["false_positive_rate"],
-            "confusion_matrix": augmented_metrics["confusion_matrix"],
-        },
-    }
-    return summary
+    print("\n=== Leakage-audited Industrial Stress Test ===")
+    print(f"TimeSeriesSplit: 3 folds, gap=1 block, speed drift={SPEED_DRIFT_RANGE[0]}-{SPEED_DRIFT_RANGE[1]} Hz")
+    print(aggregate.to_string(index=False))
+    print(f"\nSaved fold results: {output_dir / 'metric_comparison_by_fold.csv'}")
+    print(f"Saved aggregate results: {output_dir / 'metric_comparison_summary.csv'}")
+    return aggregate
 
 
 if __name__ == "__main__":
-    summary = run_training_evaluation()
-    print(summary)
+    run_training_evaluation()

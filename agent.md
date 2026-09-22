@@ -24,44 +24,44 @@ denso-predictive-maintenance/
 
 3. KẾ HOẠCH HÀNH ĐỘNG CHI TIẾT THEO NGÀY
 Ngày 1 - 3: Nền tảng Dữ liệu & Trích xuất Đặc trưng
-[ ] Khởi tạo môi trường ảo và file requirements.txt (numpy, pandas, scipy, scikit-learn, matplotlib).
+[x] Khởi tạo môi trường ảo và file requirements.txt (numpy, pandas, scipy, scikit-learn, matplotlib).
 
-[ ] Xây dựng src/baseline_generator.py: Sinh dữ liệu rung động/dòng điện chuẩn hóa (Sampling rate 1000-12000 Hz, f_base=30 Hz, kèm nhiễu nền công nghiệp, random_state=42).
+[x] Xây dựng src/baseline_generator.py: Sinh dữ liệu rung động/dòng điện chuẩn hóa (Sampling rate 1000-12000 Hz, f_base=30 Hz, kèm nhiễu nền công nghiệp, random_state=42).
 
-[ ] Xây dựng src/features.py: Trích xuất đặc trưng vật lý (Time-domain: RMS, Kurtosis, Crest Factor, Peak-to-Peak; Frequency-domain: Phổ biên độ FFT).
+[x] Xây dựng src/features.py: Trích xuất đặc trưng vật lý (Time-domain: RMS, Kurtosis, Crest Factor, Peak-to-Peak; Frequency-domain: Phổ biên độ FFT).
 
-[ ] Tạo tests/test_baseline.py: Kiểm thử luồng dữ liệu sạch và xuất file mẫu ra data/sample_baseline.csv.
+[x] Tạo tests/test_baseline.py: Kiểm thử luồng dữ liệu sạch và xuất file mẫu ra data/sample_baseline.csv.
 
 Ngày 4 - 7: Động cơ Sinh lỗi Bu lông Giả lập (Physics-informed Engine)
-[ ] Xây dựng src/fault_injector.py:
+[x] Xây dựng src/fault_injector.py:
 
-[ ] Hàm mô phỏng bu lông lỏng: Bất đối xứng độ cứng, tiêm sóng hài 0.5x, 2x, 3x và xung va đập ngắt quãng.
+[x] Hàm mô phỏng bu lông lỏng: Bất đối xứng độ cứng, tiêm sóng hài 0.5x, 2x, 3x và xung va đập ngắt quãng.
 
-[ ] Cơ chế Domain Randomization: Ngẫu nhiên hóa biên độ rung (±10%) và độ lệch tần số để chống Overfitting.
+[x] Cơ chế Domain Randomization: Ngẫu nhiên hóa biên độ rung (±10%) và độ lệch tần số để chống Overfitting.
 
-[ ] Tạo tests/test_injector.py: Xuất biểu đồ so sánh phổ FFT giữa tín hiệu bình thường và tín hiệu lỗi ra reports/figures/fft_comparison.png.
+[x] Tạo tests/test_injector.py: Xuất biểu đồ so sánh phổ FFT giữa tín hiệu bình thường và tín hiệu lỗi ra reports/figures/fft_comparison.png.
 
 Ngày 8 - 11: Mô hình Học máy & Đánh giá Thực nghiệm
-[ ] Xây dựng src/train_eval.py:
+[x] Xây dựng src/train_eval.py:
 
-[ ] Phân chia dữ liệu theo TimeSeriesSplit (tuyệt đối không shuffle ngẫu nhiên).
+[x] Phân chia dữ liệu theo TimeSeriesSplit (tuyệt đối không shuffle ngẫu nhiên), 3 fold, gap=1 và block_id độc lập.
 
-[ ] Huấn luyện mô hình (Isolation Forest / Random Forest) theo 2 kịch bản:
+[x] Huấn luyện mô hình (Isolation Forest / Random Forest) theo 2 kịch bản:
 
 Kịch bản A: Chỉ học trên dữ liệu bình thường (One-Class/Baseline).
 
 Kịch bản B: Học trên tập dữ liệu tăng cường (Normal + Synthetic Fault).
 
-[ ] Tính toán các chỉ số: Precision, Recall, F1-Score, ROC-AUC, False Positive Rate.
+[x] Tính toán các chỉ số: Precision, Recall, F1-Score, ROC-AUC, False Positive Rate.
 
-[ ] Tự động lưu biểu đồ so sánh (Confusion Matrix, ROC Curve, Phân bố điểm số bất thường) ra thư mục reports/figures/.
+[x] Tự động lưu biểu đồ so sánh (Confusion Matrix, ROC Curve, Phân bố điểm số bất thường) ra thư mục reports/figures/.
 
 Ngày 12 - 15: Đóng gói Báo cáo & Tổng kết
-[ ] Thu thập các bảng số liệu thực nghiệm và hình ảnh từ reports/figures/.
+[x] Thu thập các bảng số liệu thực nghiệm và hình ảnh từ reports/figures/.
 
-[ ] Hoàn thiện bản báo cáo thuyết minh kỹ thuật nộp ban giám khảo vòng sơ khảo.
+[x] Hoàn thiện bản báo cáo thuyết minh kỹ thuật nộp ban giám khảo vòng sơ khảo.
 
-[ ] Rà soát source code, chuẩn hóa docstrings và thực hiện commit/push toàn bộ lên nhánh main GitHub.
+[x] Rà soát source code, chuẩn hóa docstrings và chuẩn bị commit/push toàn bộ lên nhánh main GitHub.
 
 4. CHECKLIST TIẾN ĐỘ THỰC TẾ
 [x] Khởi tạo Git repository và Workspace Trust trên VS Code.
@@ -72,6 +72,19 @@ Ngày 12 - 15: Đóng gói Báo cáo & Tổng kết
 
 [x] Milestone 2: Physics-informed Fault Injector.
 
-[ ] Milestone 3: Machine Learning Model & Evaluation Figures.
+[x] Milestone 3: Machine Learning Model & Evaluation Figures.
 
-[ ] Milestone 4: Báo cáo Thuyết minh Kỹ thuật.
+[x] Milestone 4: Báo cáo Thuyết minh Kỹ thuật.
+
+## 5. KẾT QUẢ BENCHMARK CUỐI CÙNG
+
+Benchmark leakage-aware chạy trên 3 fold TimeSeriesSplit, `gap=1`, block tín hiệu độc lập và speed drift 28.5-31.5 Hz. Kết quả lấy từ `reports/figures/metric_comparison_summary.csv`:
+
+| Mức lỗi | Mô hình | Recall (mean ± std) | F1-Score (mean ± std) | FPR (mean ± std) |
+|---|---|---:|---:|---:|
+| Incipient | Baseline | 0.711 ± 0.329 | 0.751 ± 0.241 | 0.111 ± 0.139 |
+| Incipient | Augmented | 1.000 ± 0.000 | 1.000 ± 0.000 | 0.000 ± 0.000 |
+| Severe | Baseline | 0.956 ± 0.077 | 0.926 ± 0.064 | 0.111 ± 0.139 |
+| Severe | Augmented | 1.000 ± 0.000 | 1.000 ± 0.000 | 0.000 ± 0.000 |
+
+Đã hoàn tất kiểm thử cú pháp, integration test, baseline smoke test và fault-injector smoke test. Báo cáo kỹ thuật được đóng gói tại `reports/TECHNICAL_REPORT.md`.
